@@ -1,0 +1,92 @@
+{
+	"_comment": "DO NOT EDIT: FILE GENERATED FOR CALAGOPUS/PTERODACTYL IMPORT",
+	"meta": {
+		"version": "PTDL_v2",
+		"update_url": null
+	},
+	"exported_at": "2026-07-17T00:00:00-04:00",
+	"name": "Starbound (Reliable Workshop)",
+	"author": "nolangelinas@gmail.com",
+	"description": "Starbound dedicated server using Steam's canonical linux/ layout and boot-time reconciliation of downloaded Workshop packages.",
+	"features": ["steam_disk_space"],
+	"docker_images": {
+		"ghcr.io/ptero-eggs/games:source": "ghcr.io/ptero-eggs/games:source"
+	},
+	"file_denylist": [],
+	"startup": "bash ./start-starbound.sh",
+	"config": {
+		"files": "{\r\n  \"storage/starbound_server.config\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"gameServerPort\": \"{{server.build.default.port}}\",\r\n      \"allowAssetsMismatch\": false,\r\n      \"checkAssetsDigest\": true\r\n    }\r\n  }\r\n}",
+		"startup": "{\r\n  \"done\": \"Starting UniverseServer\"\r\n}",
+		"logs": "{}",
+		"stop": "^C"
+	},
+	"scripts": {
+		"installation": {
+			"script": "#!/bin/bash\nset -Eeuo pipefail\n\nSERVER_ROOT=/mnt/server\nSTEAMCMD_ROOT=\"${SERVER_ROOT}/steamcmd\"\nAPP_ID=\"${SRCDS_APPID:-211820}\"\n\nfail() {\n  echo \"[starbound-install] ERROR: $*\" >&2\n  exit 1\n}\n\n[[ -n \"${STEAM_USER:-}\" ]] || fail \"Steam User is required and cannot be anonymous\"\n[[ -n \"${STEAM_PASS:-}\" ]] || fail \"Steam Password is required for a fresh installation\"\n\nmkdir -p \"${STEAMCMD_ROOT}\" \"${SERVER_ROOT}/mods\" \"${SERVER_ROOT}/storage\"\ncd /tmp\ncurl --fail --location --silent --show-error \\\n  --output steamcmd.tar.gz \\\n  https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzf steamcmd.tar.gz -C \"${STEAMCMD_ROOT}\"\n\nexport HOME=\"${SERVER_ROOT}\"\nSTEAMCMD_LOG=\"${SERVER_ROOT}/steamcmd-install.log\"\nAUTH_MARKER=\"${SERVER_ROOT}/.steam-auth-required\"\n\nrun_steamcmd() {\n  local timeout_seconds=\"$1\"\n  local status\n  local -a steam_command\n  shift\n\n  steam_command=(\"${STEAMCMD_ROOT}/steamcmd.sh\" \"$@\")\n  if (( timeout_seconds > 0 )); then\n    steam_command=(timeout --signal=TERM \"${timeout_seconds}\" \"${steam_command[@]}\")\n  fi\n\n  : > \"${STEAMCMD_LOG}\"\n  set +e\n  \"${steam_command[@]}\" </dev/null 2>&1 | tee \"${STEAMCMD_LOG}\"\n  status=${PIPESTATUS[0]}\n  set -e\n  return \"${status}\"\n}\n\nif [[ -z \"${STEAM_AUTH:-}\" ]]; then\n  echo \"[starbound-install] probing Steam login; an unrecognized machine may trigger an email code\"\n  if ! run_steamcmd 120 +login \"${STEAM_USER}\" \"${STEAM_PASS}\" +quit ||\n    ! grep -Fq \"Logged in OK\" \"${STEAMCMD_LOG}\"; then\n    touch \"${AUTH_MARKER}\"\n    fail \"Steam did not authorize this machine. If an email code arrived, stage 1 is complete: set Steam Auth to the newest five-character code and click Reinstall immediately. Installer variables cannot change mid-run. See steamcmd-install.log.\"\n  fi\nfi\n\nsteam_login=(+login \"${STEAM_USER}\" \"${STEAM_PASS}\")\nif [[ -n \"${STEAM_AUTH:-}\" ]]; then\n  steam_login+=(\"${STEAM_AUTH}\")\nfi\n\nif ! run_steamcmd 0 \\\n  +force_install_dir \"${SERVER_ROOT}\" \\\n  \"${steam_login[@]}\" \\\n  +app_update \"${APP_ID}\" validate \\\n  +quit ||\n  ! grep -Fq \"Success! App '${APP_ID}' fully installed.\" \"${STEAMCMD_LOG}\"; then\n  touch \"${AUTH_MARKER}\"\n  if [[ -n \"${STEAM_AUTH:-}\" ]]; then\n    fail \"SteamCMD rejected the supplied code or failed the update. Use the newest email code and click Reinstall again; inspect steamcmd-install.log for the exact Steam error.\"\n  fi\n  fail \"SteamCMD failed after login. Inspect steamcmd-install.log, then click Reinstall.\"\nfi\n\n[[ -x \"${SERVER_ROOT}/linux/starbound_server\" ]] || \\\n  fail \"SteamCMD completed without installing linux/starbound_server\"\n[[ -f \"${SERVER_ROOT}/assets/packed.pak\" ]] || \\\n  fail \"SteamCMD completed without installing assets/packed.pak\"\nrm -f -- \"${AUTH_MARKER}\"\n\ninstall -D -m 0644 \\\n  \"${STEAMCMD_ROOT}/linux32/steamclient.so\" \\\n  \"${SERVER_ROOT}/.steam/sdk32/steamclient.so\"\ninstall -D -m 0644 \\\n  \"${STEAMCMD_ROOT}/linux64/steamclient.so\" \\\n  \"${SERVER_ROOT}/.steam/sdk64/steamclient.so\"\n\nif [[ ! -s \"${SERVER_ROOT}/storage/starbound_server.config\" ]]; then\n  curl --fail --location --silent --show-error \\\n    --output \"${SERVER_ROOT}/storage/starbound_server.config\" \\\n    https://raw.githubusercontent.com/pterodactyl/game-eggs/main/starbound/starbound_server.config\nfi\n\ncat > \"${SERVER_ROOT}/start-starbound.sh\" <<'STARBOUND_LAUNCHER'\n#!/bin/bash\nset -Eeuo pipefail\n\nROOT=\"${SERVER_ROOT:-/home/container}\"\nAPP_ID=\"${SRCDS_APPID:-211820}\"\nMOD_DIR=\"${ROOT}/mods\"\nWORKSHOP_ROOT=\"${ROOT}/steamapps/workshop/content/${APP_ID}\"\nSERVER_BIN=\"${ROOT}/linux/starbound_server\"\nSTAGING_DIR=\"\"\n\nfail() {\n  echo \"[starbound-launcher] ERROR: $*\" >&2\n  exit 1\n}\n\ncleanup_staging() {\n  if [[ -n \"${STAGING_DIR}\" && -d \"${STAGING_DIR}\" ]]; then\n    rm -rf -- \"${STAGING_DIR}\"\n  fi\n}\n\nremove_managed_links() {\n  local candidate base\n\n  for candidate in \"${MOD_DIR}\"/workshop_*.pak; do\n    [[ -L \"${candidate}\" ]] || continue\n    rm -f -- \"${candidate}\"\n  done\n\n  for candidate in \"${MOD_DIR}\"/*.pak; do\n    [[ -L \"${candidate}\" ]] || continue\n    base=\"${candidate##*/}\"\n    if [[ \"${base}\" =~ ^[0-9]+_[0-9]+\\.pak$ ]]; then\n      rm -f -- \"${candidate}\"\n    fi\n  done\n}\n\n[[ -x \"${SERVER_BIN}\" ]] || fail \"missing executable ${SERVER_BIN}; reinstall with this egg\"\nmkdir -p \"${MOD_DIR}\"\nshopt -s nullglob\n\ncase \"${WORKSHOP:-1}\" in\n  1|true|TRUE|yes|YES|on|ON) workshop_enabled=1 ;;\n  0|false|FALSE|no|NO|off|OFF) workshop_enabled=0 ;;\n  *) fail \"WORKSHOP must be a boolean value\" ;;\nesac\n\nif (( workshop_enabled == 1 )); then\n  [[ -d \"${WORKSHOP_ROOT}\" ]] || \\\n    fail \"Workshop loading is enabled but ${WORKSHOP_ROOT} does not exist\"\n\n  STAGING_DIR=\"$(mktemp -d \"${ROOT}/.workshop-links.XXXXXX\")\"\n  trap cleanup_staging EXIT\n  package_count=0\n  item_count=0\n\n  for item_dir in \"${WORKSHOP_ROOT}\"/*; do\n    [[ -d \"${item_dir}\" ]] || continue\n    item_id=\"${item_dir##*/}\"\n    if [[ ! \"${item_id}\" =~ ^[0-9]+$ ]]; then\n      echo \"[starbound-launcher] skipping unexpected Workshop directory: ${item_id}\" >&2\n      continue\n    fi\n\n    item_package_count=0\n    package_index=0\n    while IFS= read -r package; do\n      package_path=\"${package#\"${ROOT}/\"}\"\n      link_name=\"workshop_${item_id}_${package_index}.pak\"\n      relative_target=\"../${package_path}\"\n      ln -s -- \"${relative_target}\" \"${STAGING_DIR}/${link_name}\"\n      package_count=$((package_count + 1))\n      item_package_count=$((item_package_count + 1))\n      package_index=$((package_index + 1))\n    done < <(find \"${item_dir}\" -type f -name '*.pak' -print | LC_ALL=C sort)\n\n    if (( item_package_count > 0 )); then\n      item_count=$((item_count + 1))\n    fi\n  done\n\n  (( package_count > 0 )) || \\\n    fail \"Workshop loading is enabled but no .pak files were found in ${WORKSHOP_ROOT}\"\n\n  new_links=(\"${STAGING_DIR}\"/workshop_*.pak)\n  for staged_link in \"${new_links[@]}\"; do\n    link_name=\"${staged_link##*/}\"\n    destination=\"${MOD_DIR}/${link_name}\"\n    if [[ -e \"${destination}\" && ! -L \"${destination}\" ]]; then\n      fail \"reserved managed path ${destination} is occupied by a non-symlink; rename that manual package\"\n    fi\n  done\n\n  remove_managed_links\n  mv -- \"${new_links[@]}\" \"${MOD_DIR}/\"\n  trap - EXIT\n  rmdir \"${STAGING_DIR}\"\n  STAGING_DIR=\"\"\n  echo \"[starbound-launcher] linked ${package_count} Workshop packages from ${item_count} items\"\nelse\n  remove_managed_links\n  echo \"[starbound-launcher] Workshop loading disabled; managed links removed\"\nfi\n\ncd \"${ROOT}/linux\"\nexec ./starbound_server\nSTARBOUND_LAUNCHER\n\nchmod 0755 \"${SERVER_ROOT}/start-starbound.sh\"\necho \"[starbound-install] installation complete; canonical server binary retained in linux/\"\n",
+			"container": "ghcr.io/ptero-eggs/installers:debian",
+			"entrypoint": "bash"
+		}
+	},
+	"variables": [
+		{
+			"name": "Steam User",
+			"description": "Admin-only Steam account that owns Starbound and holds the desired Workshop subscriptions.",
+			"env_variable": "STEAM_USER",
+			"default_value": "",
+			"user_viewable": false,
+			"user_editable": false,
+			"rules": "required|string",
+			"field_type": "text"
+		},
+		{
+			"name": "Steam Password",
+			"description": "Admin-only password for the Steam account used to install Starbound.",
+			"env_variable": "STEAM_PASS",
+			"default_value": "",
+			"user_viewable": false,
+			"user_editable": false,
+			"rules": "required|string",
+			"field_type": "text"
+		},
+		{
+			"name": "Game ID",
+			"description": "Steam application and Workshop ID for Starbound.",
+			"env_variable": "SRCDS_APPID",
+			"default_value": "211820",
+			"user_viewable": true,
+			"user_editable": false,
+			"rules": "required|string|in:211820",
+			"field_type": "text"
+		},
+		{
+			"name": "Steam Auth",
+			"description": "Newest five-character Steam Guard code. For email Guard, install once with this blank to trigger the email, then set the code and click Reinstall immediately. Clear it after success.",
+			"env_variable": "STEAM_AUTH",
+			"default_value": "",
+			"user_viewable": true,
+			"user_editable": true,
+			"rules": "nullable|string|max:5",
+			"field_type": "text"
+		},
+		{
+			"name": "Auto Update Server",
+			"description": "Run SteamCMD before startup. Disabled by default to avoid delays and stale Steam Guard codes; enable temporarily to refresh the game and subscriptions.",
+			"env_variable": "AUTO_UPDATE",
+			"default_value": "0",
+			"user_viewable": true,
+			"user_editable": true,
+			"rules": "required|boolean",
+			"field_type": "text"
+		},
+		{
+			"name": "Load Downloaded Workshop Content",
+			"description": "Link downloaded subscribed Workshop packages into mods/ on every boot. Steam may download subscriptions regardless of this loading switch.",
+			"env_variable": "WORKSHOP",
+			"default_value": "1",
+			"user_viewable": true,
+			"user_editable": true,
+			"rules": "required|boolean",
+			"field_type": "text"
+		}
+	]
+}
