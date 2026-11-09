@@ -29,9 +29,11 @@ needs neither, because it reaches the console through Xbox Live from inside the 
    case is a first start that cannot download Paper.
 3. Refuses to start if either **Minecraft Version** or the Paper jar on disk is older than the newest
    version this world has run on, which it records in `.crossplay/minecraft-version`.
-4. Starts Paper with 80% of the memory limit as heap and Geyser's NetherNet settings: built-in
-   signaling over TCP and gameplay over UDP, both on **Bedrock Port**, with clients told to use
-   **Bedrock LAN Address** because the container's own address is private.
+4. Starts Paper with a 1 GiB initial heap (capped at the maximum for smaller memory limits) and a
+   maximum heap of 80% of the memory limit. Pre-touching is disabled so an idle server does not
+   allocate its maximum heap upfront. Geyser uses built-in NetherNet signaling over TCP and gameplay
+   over UDP, both on **Bedrock Port**, with clients told to use **Bedrock LAN Address** because the
+   container's own address is private.
 
 Calagopus also rewrites these settings before every start, so edits to them do not stick:
 
@@ -87,7 +89,10 @@ You can also import `egg-minecraft-crossplay.json` by hand through **Admin → N
 ### 2. Create the server
 
 - **Image:** Java 25 (the only one offered; Paper 26.3 needs it).
-- **Memory:** 6144 MiB is comfortable for a few players. The start refuses limits below 1024 MiB.
+- **Memory:** keep the 6144 MiB limit for this server's maximum of three players. It starts with a
+  1024 MiB heap and can grow to 4915 MiB as needed, with additional memory used outside the heap.
+  The JVM may retain expanded heap memory after players leave. The start refuses limits below
+  1024 MiB.
 - **Allocations:** the primary allocation is the Java port (25565). Add a second allocation for
   Bedrock (19132). Calagopus publishes every allocation on both TCP and UDP, which NetherNet needs.
 - **Minecraft Version:** `26.3`.
