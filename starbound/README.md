@@ -18,7 +18,7 @@ repository using its Git URL, click **Sync**, open its **Eggs** tab, and install
 desired nest. For later changes, sync the repository again and use **Update from Repository** on
 the installed egg. Synchronization is explicit rather than automatic on every Git push.
 
-Changes merged to `main` under `stacks/calagopus/eggs/` are published by
+Generated files under `eggs/starbound/dist/` are published after merging to `main` by
 `.github/workflows/publish-calagopus-eggs.yml` to the public mirror:
 
 ```text
@@ -30,8 +30,7 @@ Git URL and has no separate credential or deploy-key field. Do not embed a GitHu
 the complete URL is stored and returned as ordinary repository metadata. The safe choices are:
 
 - Continue importing `egg-starbound-reliable.json` through **Admin → Nests**.
-- Publish `stacks/calagopus/eggs/` to a dedicated public, read-only egg repository and register
-  that repository with Calagopus.
+- Use the public egg mirror above, which contains only each egg's generated distribution files.
 - Make this entire repository public only after separately reviewing everything it contains.
 
 A private, network-restricted Git mirror that Calagopus can read without URL credentials also
@@ -115,6 +114,23 @@ example config so a partial or stale Workshop set cannot connect silently.
 The launcher intentionally refuses to start when Workshop loading is enabled but the content
 directory is missing or contains no `.pak` files. Check the SteamCMD output, account subscriptions,
 and `steamapps/workshop/content/211820/` rather than enabling Starbound's asset-mismatch override.
+
+## Developing this egg
+
+In the private nrgserver repository, edit `eggs/starbound/src/install.sh`, `src/launcher.sh` or
+`src/egg-starbound-reliable.json`. Edit this runbook at `eggs/starbound/README.md`. From the
+repository root, run:
+
+```sh
+python3 scripts/build-eggs.py
+python3 scripts/build-eggs.py --check
+```
+
+Commit both the sources and regenerated `dist/` files. The public mirror receives only `dist/`,
+under the existing `starbound/` path. Do not edit the mirror or generated files directly.
+For installer or launcher changes, sync the repository, use **Update from Repository** on the egg,
+then stop the server and **Reinstall** with the option to delete all files unchecked. The installer
+runs SteamCMD again; handle any Steam Guard challenge as described above.
 
 ## Upstream references
 
