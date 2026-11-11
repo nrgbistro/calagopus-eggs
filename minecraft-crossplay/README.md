@@ -1,23 +1,33 @@
 # Reliable Minecraft crossplay egg
 
-One Paper server that Java and Bedrock players share. It is built for a Java player who connects over
-the internet and an Xbox player on the same LAN as the server, with as little to babysit as possible.
+One Paper world shared by Java, Xbox and iOS/Android players, at home and over the internet.
+Java and mobile players save **mc.nrgserver.me**; Xbox players join the bot's **Friends** session.
 
 ## How players reach the server
 
-- **Java (internet):** `mc.nrgserver.me` resolves to the home IP through a DNS-only record that
-  ddclient keeps current. The router forwards TCP 25565 to the Docker host.
-- **Xbox (LAN):** the console sees the server in its **Friends** tab because MCXboxBroadcast publishes
-  it as a joinable session from a bot Xbox account. When the console joins, MCXboxBroadcast relays the
-  connection request to Geyser inside the container, and Geyser answers with **Bedrock LAN Address**
-  and **Bedrock Port**. Gameplay then goes straight over the LAN, and Floodgate lets the console in
-  without a Java account.
+- **Java:** the DNS-only wildcard record, kept current by ddclient, resolves `mc.nrgserver.me` to the
+  home IP. The router forwards TCP 25565 to Paper on the Calagopus/Wings VM at `192.168.0.11`.
+- **iOS/Android Bedrock:** save `mc.nrgserver.me` with the default Bedrock port, 19132. The router
+  forwards TCP and UDP 19132 to Geyser in the same game container. TCP handles NetherNet signaling;
+  UDP carries gameplay. Geyser and Floodgate connect the player to the same Paper world.
+- **Xbox:** MCXboxBroadcast advertises a joinable session through the bot's Xbox account. When the
+  player joins from **Play → Friends**, the bot relays the request to Geyser inside the container.
+  Geyser supplies the gameplay connection information; the bot does not relay gameplay. The same
+  Friends session can be used from home or another network when that network permits the connection.
 
-Consoles cannot add custom servers, and Bedrock 26.60 (2026-10-27) removed the RakNet transport that
-most workarounds relied on. Geyser does not answer the new NetherNet LAN discovery, and Docker's bridge
-network would not deliver LAN broadcasts to the game container anyway. BedrockConnect supports NetherNet
-since 1.72, but it needs its own server plus DNS overrides on the console's network. MCXboxBroadcast
-needs neither, because it reaches the console through Xbox Live from inside the container.
+**Bedrock Advertise Address = auto** enables Geyser's STUN discovery instead of pinning the VM's LAN
+address. Discovery supplies public UDP mappings alongside the candidates gathered by ICE and is
+refreshed by the networking library. ddclient and discovery have different jobs: ddclient keeps the
+initial hostname reachable, while discovery keeps the gameplay endpoint current. An ISP address
+change can interrupt play until DNS and discovery catch up; it is not a seamless connection handover.
+
+Using the public hostname from home may require the router's NAT loopback for both TCP and UDP.
+Java working at home proves only the TCP path. Test all clients inside and outside before relying
+on the setup; Docker/NAT mappings and a particular Xbox or mobile network can still affect Bedrock.
+
+Consoles cannot add custom servers. MCXboxBroadcast keeps that restriction out of the connection
+steps; phones can add the server directly. Java already defaults to 25565 and Bedrock to 19132, so
+no SRV record is needed. Bedrock does not support SRV records.
 
 ## What every start does
 
@@ -32,8 +42,8 @@ needs neither, because it reaches the console through Xbox Live from inside the 
 4. Starts Paper with a 1 GiB initial heap (capped at the maximum for smaller memory limits) and a
    maximum heap of 80% of the memory limit. Pre-touching is disabled so an idle server does not
    allocate its maximum heap upfront. Geyser uses built-in NetherNet signaling over TCP and gameplay
-   over UDP, both on **Bedrock Port**, with clients told to use **Bedrock LAN Address** because the
-   container's own address is private.
+   over UDP, both on **Bedrock Port**. Auto mode enables STUN discovery; an explicit IP disables
+   discovery and supplies only that address as the advertised endpoint.
 
 Calagopus also rewrites these settings before every start, so edits to them do not stick:
 
@@ -42,6 +52,7 @@ Calagopus also rewrites these settings before every start, so edits to them do n
 | `server.properties` | `online-mode=true`, `white-list=true`, `enforce-whitelist=true` | The Java port is on the internet. |
 | `server.properties` | `enforce-secure-profile=false` | Bedrock players cannot sign chat messages. |
 | MCXboxBroadcast `config.yml` | `friend-sync.expiry.enabled: false` | The default unfriends anyone who has not joined for 15 days. |
+| Geyser `config.yml` | `bedrock.signaling.advertise-addresses: []` | A saved explicit list would disable STUN even when auto mode enables it. Explicit IP mode uses a JVM override. |
 
 Leave MCXboxBroadcast's `session.remote-address` and `session.remote-port` on `auto`: the extension
 then relays joins to Geyser inside the container, while any other address sends them out through
@@ -97,7 +108,10 @@ You can also import `egg-minecraft-crossplay.json` by hand through **Admin → N
   Bedrock (19132). Calagopus publishes every allocation on both TCP and UDP, which NetherNet needs.
 - **Minecraft Version:** `26.3`.
 - **Bedrock Port:** `19132` (the second allocation's port).
-- **Bedrock LAN Address:** `192.168.0.11`.
+- **Bedrock Advertise Address:** `auto`. A literal IPv4/IPv6 address is an explicit fallback and
+  disables discovery. Setting `192.168.0.11` permits only clients that can reach that LAN IP (home
+  or a routed VPN); it does not enable public Bedrock play. Hostnames and address lists are not
+  accepted by this egg's fallback setting.
 - **Auto Update:** on (`1`).
 - **Xbox Friends Broadcast:** on (`1`).
 
@@ -129,8 +143,9 @@ You can also import `egg-minecraft-crossplay.json` by hand through **Admin → N
    | Destination LAN IP | 192.168.0.11 |
    | Internal port | 25565 |
 
-   Do not forward port **19132**: the Xbox reaches it over the LAN. If a VM firewall is enabled,
-   allow TCP 25565 for Java and TCP/UDP 19132 from the Xbox's LAN.
+   Add a second rule for **both TCP and UDP**, external port **19132** to
+   **192.168.0.11**, internal port **19132**. The operator has already configured this forwarding;
+   verify both protocols are included. If a VM firewall is enabled, allow TCP 25565 and TCP/UDP 19132.
 2. Use the existing wildcard DNS record. With a DNS-only wildcard already maintained by ddclient,
    no new DNS record, ddclient edit or configuration PR is needed. Confirm the hostname resolves to
    your current public home IPv4 address:
@@ -145,13 +160,26 @@ You can also import `egg-minecraft-crossplay.json` by hand through **Admin → N
    **mc.nrgserver.me** as the server address and join. Port 25565 is the default, so no port suffix
    is needed. Confirm they can enter the world.
 
-### 5. The Xbox player
+### 5. Bedrock players
+
+For iOS/Android, sign into Minecraft with the player's Microsoft account. Add their Xbox gamertag
+with `fwhitelist add <XboxGamertag>` in the panel console, then use **Play → Servers → Add Server**:
+
+| Field | Value |
+| --- | --- |
+| Server name | NRG Server |
+| Server address | mc.nrgserver.me |
+| Port | 19132 (leave the default) |
+
+Save the entry once and use it on home Wi-Fi or away. Accept a trust prompt if shown.
+
+For Xbox:
 
 1. On the Xbox, add the bot account's gamertag as a friend. The bot accepts within about a minute.
 2. In Minecraft, open **Play → Friends**. The server is listed under the joinable friends.
 3. Join. If the console asks whether to trust the server, accept it.
-4. Confirm the Xbox and Java players can see each other in the same world. A real Xbox join is the
-   end-to-end check for the bot, Geyser and LAN allocations.
+4. Confirm the Xbox, phone and Java players enter the same world. Repeat the phone test on mobile
+   data with Wi-Fi off and the Xbox test on an outside network when available.
 
 Keep `plugins/Geyser-Spigot/nethernet/identity.pem`: it is the server's NetherNet identity, and a new
 one makes a console that trusted the old one ask again. The Xbox account's privacy and online-safety
@@ -182,6 +210,43 @@ Run the backup schedule manually once and confirm the backup completes and `save
 Then run the restart schedule and confirm the server returns and both players can reconnect. Adjust
 its time if the backup would overlap it. Leave crash detection on so Calagopus restarts the server
 after a crash.
+
+## Updating an existing LAN-only server
+
+1. After merging, wait for **Publish Calagopus Eggs** to succeed, then sync the public egg repository.
+2. In **Admin → Nests**, open the nest, its **Eggs** tab, then **Minecraft Crossplay (Reliable)**.
+   Scroll to **Update → from Repository** and select this egg. On newer panels the installed egg
+   may also have an **Update** button under **Admin → Egg Library → Installed**.
+3. Stop the game server and **Reinstall**, leaving **delete all files unchecked**. This replaces the
+   launcher without deleting the world, bot sign-in or NetherNet identity.
+4. In the server's startup variables, change **Bedrock Advertise Address** from its saved
+   `192.168.0.11` to **auto**. Updating the egg does not replace an existing server's saved value.
+5. Confirm TCP and UDP 19132 are forwarded, then start. The console should show
+   `STUN discovery set from system property: true` and should not show
+   `Advertised addresses set from system property: 192.168.0.11`.
+6. If upgrading a Geyser configuration with `config-version` 10 or older and custom address lists,
+   restart once more after Geyser migrates it. That migration can copy legacy
+   `bedrock.signaling.builtin.advertise-addresses` or `bedrock.signaling.nxs.advertise-addresses`
+   back into the new list; the next start clears it again. Current configurations do not need this.
+7. Test the following matrix. The live router, iOS and Xbox paths require real clients; a successful
+   server boot alone does not prove they work.
+
+| Client | Home | Outside |
+| --- | --- | --- |
+| Java | mc.nrgserver.me, default 25565 | Same saved server |
+| iOS/Android | mc.nrgserver.me, default 19132 | Same saved server, Wi-Fi off for mobile-data test |
+| Xbox | Bot's Friends session | Same bot's Friends session |
+
+If home Bedrock fails but outside works, investigate UDP NAT loopback. A local DNS override for only
+`mc.nrgserver.me` to `192.168.0.11` can avoid public routing for the initial connection, but does not
+itself fix an unreachable gameplay candidate. Do not change the public wildcard or other services.
+If discovery produces unusable endpoints in this Docker/router combination, collect diagnostics
+before changing mode. The explicit LAN IP fallback restores the previous LAN-only behavior; it does
+not satisfy simultaneous public access.
+
+Verify recovery after a public-IP change when one next occurs: ddclient must update DNS, STUN must
+refresh the public mappings, and outside clients must be able to reconnect. A daily restart is not
+the intended IP-update mechanism in auto mode.
 
 ## Operating it
 
@@ -231,7 +296,9 @@ and configs stay untouched.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | The server is missing from the Xbox Friends tab | The bot is not a friend, needs a new sign-in, or **Xbox Friends Broadcast** is off | Look for MCXboxBroadcast errors or a new sign-in code in the console, and confirm the friendship in the Xbox app. |
-| The Xbox finds the server but cannot join | Wrong **Bedrock LAN Address**, or no allocation for **Bedrock Port** | The console must log `Advertised addresses set from system property` with `192.168.0.11`, and the second allocation must equal Bedrock Port. MCXboxBroadcast logs `Relayed bedrock client` for each join it passes to Geyser, or `Failed to relay offer` with the reason. |
+| Bedrock lists the server but cannot join | Missing UDP forward, unusable discovered mapping, or an explicit LAN-only address | Use **Bedrock Advertise Address = auto** for public play; confirm the STUN log and both TCP/UDP 19132 forwarding. MCXboxBroadcast logs `Relayed bedrock client` for a relayed Xbox join, or `Failed to relay offer` with the reason. |
+| Bedrock works away but not at home | UDP NAT loopback or local routing | Test the LAN path and the router's loopback support. A local DNS override changes only initial lookup; verify gameplay candidates too. |
+| Auto mode still advertises only the old LAN IP | Existing server variable or old launcher | Set the saved startup variable to auto and reinstall the launcher after updating the egg. |
 | The Xbox reports an outdated server | The console updated before Geyser or MCXboxBroadcast supported its version | Restart to install the newest builds. If either project has no build for the version yet, wait for one. |
 | Every join asks to trust the server again | `identity.pem` was deleted | Restore it from a backup, or accept the prompt once more. |
 | Only the Java player cannot connect | Stale DNS record or missing port forward | `mc.nrgserver.me` must resolve to the current home IP, and TCP 25565 must be forwarded to `192.168.0.11:25565`. |
@@ -268,5 +335,7 @@ mirror directly. Apply launcher changes with the sync, update and reinstall proc
 - [Geyser system properties](https://geysermc.org/wiki/geyser/geyser-command-line-arguments-and-system-properties/)
 - [Geyser and secure chat](https://geysermc.org/wiki/geyser/secure-chat/)
 - [MCXboxBroadcast](https://github.com/MCXboxBroadcast/Broadcaster)
+- [Geyser address and STUN configuration](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/configuration/GeyserConfig.java)
+- [NetherNet discovery and refresh implementation](https://github.com/CloudburstMC/Network/blob/nethernet/transport-nethernet/src/main/java/org/cloudburstmc/netty/channel/nethernet/signaling/NetherNetHTTPServerSignaling.java)
 - [Paper downloads service](https://docs.papermc.io/misc/downloads-service/)
 - [Calagopus egg repositories](https://calagopus.com/docs/panel/next-steps/egg-repos)
