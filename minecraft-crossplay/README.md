@@ -284,6 +284,19 @@ upgraded world with it. To go back across versions, restore a backup taken befor
 | ViaVersion | `plugins/ViaVersion.jar` |
 | MCXboxBroadcast | `plugins/Geyser-Spigot/extensions/MCXboxBroadcastExtension.jar` |
 
+### Updating the Java runtime
+
+After publishing a Java image change, sync the repository and update the installed egg.
+If you are switching to the official Pterodactyl image for the first time, reinstall the launcher
+using the steps below before starting the server with the new image. The old launcher expects
+`unzip`, which the official image does not ship.
+
+For an existing server, select **Java 25** under **Startup → Docker Image** to apply the new
+image reference. If the selector is locked, set the egg's image reference under
+**Admin → Servers → your server → General**. Stop and start the server so Wings pulls the
+image. Check Paper's `[bootstrap] Running Java` line for the new build. A Java image update
+requires only a stop and start after the image is saved.
+
 ### Updating the launcher
 
 The installer writes `start-minecraft.sh`, so a changed egg reaches an existing server through
